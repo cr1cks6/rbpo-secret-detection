@@ -3,7 +3,7 @@ name: Secrets and Fuzzing Pipeline
 on: [push, pull_request]
 
 jobs:
-  # 1. Поиск секретов (уже работает)
+  # 1. Поиск секретов (уже работает отлично)
   scan-secrets:
     name: Gitleaks Scan
     runs-on: ubuntu-latest
@@ -16,7 +16,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # 2. Фаззинг (теперь без зависимости от Java-кода)
+  # 2. Веб-фаззинг (Доп. задание 2)
   web-fuzzing:
     name: Web Fuzzing with FFuF
     needs: scan-secrets
@@ -24,26 +24,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Start Test Web Server
+      # Создаем тестовую среду (имитируем сайт)
+      - name: Setup Mock Web Site
         run: |
-          # Создаем пару папок для вида, чтобы фаззер их нашел
-          mkdir -p api admin login
-          # Запускаем простейший сервер на Python (он встроен в Linux)
-          python3 -m http.server 8080 &
+          mkdir -p site/api site/admin site/login
+          echo "Welcome" > site/index.html
+          # Запускаем сервер на порту 8080
+          python3 -m http.server 8080 --directory site &
           sleep 5
 
-      - name: Run FFuF (Fuzzing)
+      # Устанавливаем FFuF напрямую (это надежнее Docker в CI)
+      - name: Install FFuF
         run: |
-          # Создаем словарь путей
-          echo -e "api\nadmin\nstudents\ncourses\nlogin\nconfig\n.env" > wordlist.txt
-          
-          # Запускаем фаззер против нашего сервера
-          docker run --rm --network="host" -v $(pwd):/mnt ffuf/ffuf \
-          -w /mnt/wordlist.txt \
-          -u http://localhost:8080/FUZZ \
-          -o /mnt/fuzz-results.json
+          wget https://github.com/ffuf/ffuf/releases/download/v2.1.0/ffuf_2.1.0_linux_amd64.tar.gz
+          tar -xf ffuf_2.1.0_linux_amd64.tar.gz
+          chmod +x ffuf
+          sudo mv ffuf /usr/local/bin/
 
-      - name: Upload Fuzzing Results
+      # Запускаем фаззинг
+      - name: Run Fuzzing Scan
+        run: |
+          # Создаем словарь
+          echo -e "api\nadmin\nlogin\nconfig\n.env\nserver-status" > wordlist.txt
+          
+          # Фаззим наш сервер
+          ffuf -w wordlist.txt -u http://localhost:8080/FUZZ -o fuzz-results.json
+
+      # Сохраняем отчет
+      - name: Upload Results
         uses: actions/upload-artifact@v4
         with:
           name: fuzzing-report
