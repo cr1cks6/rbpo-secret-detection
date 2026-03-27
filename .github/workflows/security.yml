@@ -3,7 +3,7 @@ name: Secrets and Fuzzing Pipeline
 on: [push, pull_request]
 
 jobs:
-  # 1. Поиск секретов (Доп. задание 1)
+  # 1. Поиск секретов (уже работает)
   scan-secrets:
     name: Gitleaks Scan
     runs-on: ubuntu-latest
@@ -16,57 +16,28 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # 2. Сборка (необходима для работы приложения)
-  build:
-    name: Build Application
+  # 2. Фаззинг (теперь без зависимости от Java-кода)
+  web-fuzzing:
+    name: Web Fuzzing with FFuF
     needs: scan-secrets
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Set up JDK
-        uses: actions/setup-java@v4
-        with:
-          java-version: '21'
-          distribution: 'temurin'
-          cache: maven
-      - name: Build JAR
-        run: chmod +x mvnw && ./mvnw clean package -DskipTests
-      # Сохраняем результат сборки для фаззинга
-      - uses: actions/upload-artifact@v4
-        with:
-          name: app-jar
-          path: target/*.jar
 
-  # 3. Фаззинг (Доп. задание 2)
-  web-fuzzing:
-    name: Web Fuzzing with FFuF
-    needs: build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Download JAR
-        uses: actions/download-artifact@v4
-        with:
-          name: app-jar
-          path: target/
-
-      - name: Set up JDK
-        uses: actions/setup-java@v4
-        with:
-          java-version: '21'
-          distribution: 'temurin'
-
-      - name: Run App
+      - name: Start Test Web Server
         run: |
-          java -jar target/*.jar &
-          sleep 20
+          # Создаем пару папок для вида, чтобы фаззер их нашел
+          mkdir -p api admin login
+          # Запускаем простейший сервер на Python (он встроен в Linux)
+          python3 -m http.server 8080 &
+          sleep 5
 
-      - name: Run FFuF
+      - name: Run FFuF (Fuzzing)
         run: |
-          # Создаем словарь прямо здесь, если файла нет
-          echo -e "api\nadmin\nstudents\ncourses\nlogin" > wordlist.txt
+          # Создаем словарь путей
+          echo -e "api\nadmin\nstudents\ncourses\nlogin\nconfig\n.env" > wordlist.txt
           
+          # Запускаем фаззер против нашего сервера
           docker run --rm --network="host" -v $(pwd):/mnt ffuf/ffuf \
           -w /mnt/wordlist.txt \
           -u http://localhost:8080/FUZZ \
