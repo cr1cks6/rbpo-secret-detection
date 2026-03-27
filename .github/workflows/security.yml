@@ -1,0 +1,28 @@
+name: Secrets and Build Pipeline
+
+on: [push, pull_request]
+
+jobs:
+  # ЭТАП 1: Поиск секретов
+  scan-secrets:
+    name: Gitleaks Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Важно: Gitleaks проверяет историю коммитов
+
+      - name: Gitleaks Scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # По умолчанию этот экшен прерывает работу (fail), если найдены секреты
+
+  # ЭТАП 2: Сборка (зависит от сканирования)
+  build:
+    name: Build Application
+    needs: scan-secrets # Ждем успешного завершения сканера
+    runs-on: ubuntu-latest
+    steps:
+      - name: Build step
+        run: echo "Secrets not found. Starting build..."
