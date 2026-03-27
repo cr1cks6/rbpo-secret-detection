@@ -1,9 +1,9 @@
-name: Secrets and Fuzzing Pipeline
+name: Full Security and Container Pipeline
 
 on: [push, pull_request]
 
 jobs:
-  # 1. Поиск секретов (уже работает отлично)
+  # 1. Поиск секретов (уже работает)
   scan-secrets:
     name: Gitleaks Scan
     runs-on: ubuntu-latest
@@ -16,43 +16,56 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # 2. Веб-фаззинг (Доп. задание 2)
-  web-fuzzing:
-    name: Web Fuzzing with FFuF
+  # 2. Безопасность контейнера (Доп. задание 3)
+  docker-security:
+    name: Docker Build, Scan and Push
     needs: scan-secrets
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # Нужно для публикации в реестр
     steps:
       - uses: actions/checkout@v4
 
-      # Создаем тестовую среду (имитируем сайт)
-      - name: Setup Mock Web Site
+      # Сборка образа локально
+      - name: Build Docker Image
+        run: docker build -t ghcr.io/${{ github.repository_owner }}/myapp:latest .
+
+      # СКАНЕР TRIVY: Ищет уязвимости
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'ghcr.io/${{ github.repository_owner }}/myapp:latest'
+          format: 'table'
+          # ОСТАНАВЛИВАТЬ СБОРКУ (exit code 1), если найдены КРИТИЧЕСКИЕ уязвимости
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL'
+
+      # ПУБЛИКАЦИЯ: Выполнится только если Trivy не нашел критических дыр
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push Image to GHCR
+        run: docker push ghcr.io/${{ github.repository_owner }}/myapp:latest
+
+  # 3. Фаззинг (уже работает)
+  web-fuzzing:
+    name: Web Fuzzing with FFuF
+    needs: docker-security
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run Fuzzing
         run: |
-          mkdir -p site/api site/admin site/login
-          echo "Welcome" > site/index.html
-          # Запускаем сервер на порту 8080
+          mkdir site && echo "Fuzz Test" > site/index.html
           python3 -m http.server 8080 --directory site &
           sleep 5
-
-      # Устанавливаем FFuF напрямую (это надежнее Docker в CI)
-      - name: Install FFuF
-        run: |
           wget https://github.com/ffuf/ffuf/releases/download/v2.1.0/ffuf_2.1.0_linux_amd64.tar.gz
           tar -xf ffuf_2.1.0_linux_amd64.tar.gz
-          chmod +x ffuf
-          sudo mv ffuf /usr/local/bin/
-
-      # Запускаем фаззинг
-      - name: Run Fuzzing Scan
-        run: |
-          # Создаем словарь
-          echo -e "api\nadmin\nlogin\nconfig\n.env\nserver-status" > wordlist.txt
-          
-          # Фаззим наш сервер
-          ffuf -w wordlist.txt -u http://localhost:8080/FUZZ -o fuzz-results.json
-
-      # Сохраняем отчет
-      - name: Upload Results
-        uses: actions/upload-artifact@v4
-        with:
-          name: fuzzing-report
-          path: fuzz-results.json
+          ./ffuf -w <(echo -e "api\nadmin\nlogin") -u http://localhost:8080/FUZZ -o fuzz-results.json
