@@ -1,37 +1,77 @@
-web-fuzzing:
+name: Secrets and Fuzzing Pipeline
+
+on: [push, pull_request]
+
+jobs:
+  # 1. Поиск секретов (Доп. задание 1)
+  scan-secrets:
+    name: Gitleaks Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Gitleaks Scan
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # 2. Сборка (необходима для работы приложения)
+  build:
+    name: Build Application
+    needs: scan-secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+      - name: Build JAR
+        run: chmod +x mvnw && ./mvnw clean package -DskipTests
+      # Сохраняем результат сборки для фаззинга
+      - uses: actions/upload-artifact@v4
+        with:
+          name: app-jar
+          path: target/*.jar
+
+  # 3. Фаззинг (Доп. задание 2)
+  web-fuzzing:
     name: Web Fuzzing with FFuF
-    # Мы можем запустить это только если есть собранный JAR (из лабы 2 или 5)
-    # Если ты делаешь это в новом репо, просто добавь шаг сборки JAR
+    needs: build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      # 1. Устанавливаем Java, чтобы запустить наше приложение
+      - name: Download JAR
+        uses: actions/download-artifact@v4
+        with:
+          name: app-jar
+          path: target/
+
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:
           java-version: '21'
           distribution: 'temurin'
 
-      # 2. Собираем приложение (или скачиваем артефакт, если он есть)
-      - name: Build JAR
-        run: chmod +x mvnw && ./mvnw clean package -DskipTests
-
-      # 3. Запускаем приложение в фоновом режиме
       - name: Run App
         run: |
           java -jar target/*.jar &
-          sleep 30 # Ждем запуска
+          sleep 20
 
-      # 4. Запускаем фаззинг (используем Docker-образ FFuF)
       - name: Run FFuF
         run: |
+          # Создаем словарь прямо здесь, если файла нет
+          echo -e "api\nadmin\nstudents\ncourses\nlogin" > wordlist.txt
+          
           docker run --rm --network="host" -v $(pwd):/mnt ffuf/ffuf \
           -w /mnt/wordlist.txt \
           -u http://localhost:8080/FUZZ \
           -o /mnt/fuzz-results.json
-          
-      # 5. Сохраняем результаты
+
       - name: Upload Fuzzing Results
         uses: actions/upload-artifact@v4
         with:
